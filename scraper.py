@@ -9,33 +9,44 @@ import json
 import os
 from datetime import datetime
 
-def get_google_token():
-    """Get Google OAuth token from environment"""
-    # For Render deployment, we'll use a service account
-    # For local testing, fallback to the auth helper
-    service_account_json = os.getenv('GOOGLE_SERVICE_ACCOUNT_JSON')
+def get_google_credentials():
+    """Load Google API credentials from environment or local file."""
+    from google.oauth2.credentials import Credentials
+    from google.auth.transport.requests import Request
 
-    if service_account_json:
-        # Use service account for Render
-        from google.oauth2 import service_account
-        from google.auth.transport.requests import Request
+    # Try environment variables first (for Render deployment)
+    if all(os.getenv(k) for k in ['GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET', 'GOOGLE_REFRESH_TOKEN']):
+        print("Loading credentials from environment variables")
+        token_data = {
+            'client_id': os.getenv('GOOGLE_CLIENT_ID'),
+            'client_secret': os.getenv('GOOGLE_CLIENT_SECRET'),
+            'refresh_token': os.getenv('GOOGLE_REFRESH_TOKEN'),
+            'token_uri': os.getenv('GOOGLE_TOKEN_URI', 'https://oauth2.googleapis.com/token'),
+            'scopes': ['https://www.googleapis.com/auth/spreadsheets']
+        }
 
-        credentials_dict = json.loads(service_account_json)
-        credentials = service_account.Credentials.from_service_account_info(
-            credentials_dict,
-            scopes=['https://www.googleapis.com/auth/spreadsheets']
-        )
-        credentials.refresh(Request())
-        return credentials.token
+        creds = Credentials.from_authorized_user_info(token_data)
+
+        if creds.expired and creds.refresh_token:
+            print("Refreshing credentials...")
+            creds.refresh(Request())
+
+        return creds
     else:
-        # Fallback to local auth helper for testing
+        # Fallback to local tokens file for testing
         import subprocess
         result = subprocess.run(
             ['python3', os.path.expanduser('~/.google_auth_helper.py'), '--get-token'],
             capture_output=True,
             text=True
         )
-        return result.stdout.strip().split('\n')[-1]
+        token = result.stdout.strip().split('\n')[-1]
+
+        # Return a simple object with token attribute
+        class TokenHolder:
+            def __init__(self, token):
+                self.token = token
+        return TokenHolder(token)
 
 def get_eyeglass_world_count():
     """Get Eyeglass World store count from their API"""
@@ -110,10 +121,10 @@ def get_americas_best_count():
 
 def append_to_google_sheet(spreadsheet_id, data):
     """Append data to existing Google Sheet"""
-    token = get_google_token()
+    creds = get_google_credentials()
 
     headers = {
-        "Authorization": f"Bearer {token}",
+        "Authorization": f"Bearer {creds.token}",
         "Content-Type": "application/json"
     }
 
@@ -136,11 +147,11 @@ def append_to_google_sheet(spreadsheet_id, data):
 
 def create_google_sheet_if_needed():
     """Create initial Google Sheet if SPREADSHEET_ID is not set"""
-    token = get_google_token()
+    creds = get_google_credentials()
 
     create_url = "https://sheets.googleapis.com/v4/spreadsheets"
     headers = {
-        "Authorization": f"Bearer {token}",
+        "Authorization": f"Bearer {creds.token}",
         "Content-Type": "application/json"
     }
 
