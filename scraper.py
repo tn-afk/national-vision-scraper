@@ -7,6 +7,7 @@ and append to Google Sheet daily
 import requests
 import json
 import os
+import sys
 from datetime import datetime
 
 def get_google_credentials():
@@ -27,9 +28,13 @@ def get_google_credentials():
 
         creds = Credentials.from_authorized_user_info(token_data)
 
-        if creds.expired and creds.refresh_token:
-            print("Refreshing credentials...")
+        # Always refresh to get a valid access token (token is None when created from refresh_token only)
+        if creds.refresh_token:
+            print("Refreshing credentials to get access token...")
             creds.refresh(Request())
+            if not creds.token:
+                raise Exception("Failed to obtain access token after refresh")
+            print("Access token obtained successfully")
 
         return creds
     else:
@@ -219,7 +224,7 @@ def main():
         spreadsheet_id = create_google_sheet_if_needed()
         if not spreadsheet_id:
             print("✗ Failed to create Google Sheet")
-            return
+            sys.exit(1)
 
     print(f"\nAppending to Google Sheet...")
     success = append_to_google_sheet(spreadsheet_id, data)
@@ -231,8 +236,14 @@ def main():
         print(f"America's Best: {americas_best_count if americas_best_count else 'N/A'}")
         sheet_url = f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}"
         print(f"View at: {sheet_url}")
+        sys.exit(0)
     else:
         print(f"\n✗ Failed to append data")
+        sys.exit(1)
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        print(f"\n✗ Fatal error: {e}")
+        sys.exit(1)
