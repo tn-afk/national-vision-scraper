@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-Scrape Victoria's Secret store counts by state and append to Google Sheet daily.
+Scrape Victoria's Secret total US store count and append to Google Sheet daily.
+Sheet format: Column A = Date, Column B = Total Store Count
 """
 
 import requests
@@ -9,22 +10,14 @@ import os
 import time
 from datetime import datetime, timezone
 
-STATES = {
-    "Alabama": "al", "Alaska": "ak", "Arizona": "az", "Arkansas": "ar",
-    "California": "ca", "Colorado": "co", "Connecticut": "ct", "Delaware": "de",
-    "District of Columbia": "dc", "Florida": "fl", "Georgia": "ga", "Hawaii": "hi",
-    "Idaho": "id", "Illinois": "il", "Indiana": "in", "Iowa": "ia",
-    "Kansas": "ks", "Kentucky": "ky", "Louisiana": "la", "Maine": "me",
-    "Maryland": "md", "Massachusetts": "ma", "Michigan": "mi", "Minnesota": "mn",
-    "Mississippi": "ms", "Missouri": "mo", "Montana": "mt", "Nebraska": "ne",
-    "Nevada": "nv", "New Hampshire": "nh", "New Jersey": "nj", "New Mexico": "nm",
-    "New York": "ny", "North Carolina": "nc", "North Dakota": "nd", "Ohio": "oh",
-    "Oklahoma": "ok", "Oregon": "or", "Pennsylvania": "pa", "Puerto Rico": "pr",
-    "Rhode Island": "ri", "South Carolina": "sc", "South Dakota": "sd",
-    "Tennessee": "tn", "Texas": "tx", "Utah": "ut", "Vermont": "vt",
-    "Virginia": "va", "Washington": "wa", "West Virginia": "wv",
-    "Wisconsin": "wi", "Wyoming": "wy",
-}
+STATE_CODES = [
+    "al", "ak", "az", "ar", "ca", "co", "ct", "de", "dc", "fl",
+    "ga", "hi", "id", "il", "in", "ia", "ks", "ky", "la", "me",
+    "md", "ma", "mi", "mn", "ms", "mo", "mt", "ne", "nv", "nh",
+    "nj", "nm", "ny", "nc", "nd", "oh", "ok", "or", "pa", "pr",
+    "ri", "sc", "sd", "tn", "tx", "ut", "vt", "va", "wa", "wv",
+    "wi", "wy",
+]
 
 BASE_URL = "https://stores.victoriassecret.com/us"
 
@@ -40,12 +33,11 @@ def get_google_credentials():
             'client_id': os.getenv('GOOGLE_CLIENT_ID'),
             'client_secret': os.getenv('GOOGLE_CLIENT_SECRET'),
             'refresh_token': os.getenv('GOOGLE_REFRESH_TOKEN'),
-            'token_uri': os.getenv('GOOGLE_TOKEN_URI', 'https://oauth2.googleapis.com/token'),
+            'token_uri': 'https://oauth2.googleapis.com/token',
             'scopes': ['https://www.googleapis.com/auth/spreadsheets']
         }
         creds = Credentials.from_authorized_user_info(token_data)
         if creds.expired and creds.refresh_token:
-            print("Refreshing credentials...")
             creds.refresh(Request())
         return creds
     else:
@@ -72,135 +64,56 @@ def scrape_state(state_code):
             return sum(int(c) for c in counts)
         else:
             print(f"  HTTP {resp.status_code} for {state_code}")
-            return None
+            return 0
     except Exception as e:
         print(f"  Error scraping {state_code}: {e}")
-        return None
+        return 0
 
 
-def scrape_all_states():
-    """Scrape all states and return dict of {state_name: count}."""
-    results = {}
-    for state_name, state_code in sorted(STATES.items()):
-        count = scrape_state(state_code)
-        results[state_name] = count
-        status = count if count is not None else "FAILED"
-        print(f"  {state_name}: {status}")
-        time.sleep(0.5)  # be polite
-    return results
+def scrape_total():
+    """Scrape all states and return total store count."""
+    total = 0
+    for code in STATE_CODES:
+        count = scrape_state(code)
+        total += count
+        time.sleep(0.5)
+    return total
 
 
-def append_to_sheet(spreadsheet_id, results, today):
-    """Append today's data to the Google Sheet."""
+def append_to_sheet(spreadsheet_id, today, total):
+    """Append a row [date, total] to the sheet."""
     creds = get_google_credentials()
     headers = {
         "Authorization": f"Bearer {creds.token}",
         "Content-Type": "application/json"
     }
 
-    # Build rows: one per state + total row
-    rows = []
-    total = 0
-    for state_name in sorted(results.keys()):
-        count = results[state_name]
-        if count is not None:
-            total += count
-        rows.append([state_name, count if count is not None else "ERROR", today])
-
-    rows.append(["", "", ""])
-    rows.append(["TOTAL", total, today])
-
-    # Clear existing data and write fresh (since we want a snapshot, not append)
-    range_name = "Store Counts!A1:C55"
-    header = [["State", "Store Count", "Date"]]
-    all_rows = header + rows
-
-    update_url = (
-        f"https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}"
-        f"/values/{range_name}?valueInputOption=USER_ENTERED"
-    )
-    body = {"range": range_name, "majorDimension": "ROWS", "values": all_rows}
-    resp = requests.put(update_url, headers=headers, json=body)
-
-    if resp.status_code == 200:
-        print(f"✓ Sheet updated: {resp.json().get('updatedCells')} cells")
-    else:
-        print(f"✗ Error updating sheet: {resp.text}")
-        return False
-
-    # Also append a daily summary row to "Daily Summary" sheet
-    _ensure_daily_summary_sheet(spreadsheet_id, headers)
-    summary_range = "Daily Summary!A:C"
     append_url = (
         f"https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}"
-        f"/values/{summary_range}:append?valueInputOption=USER_ENTERED"
+        f"/values/Sheet1!A:B:append?valueInputOption=USER_ENTERED"
     )
-    summary_body = {"values": [[today, total, len([v for v in results.values() if v is not None])]]}
-    resp = requests.post(append_url, headers=headers, json=summary_body)
+    body = {"values": [[today, total]]}
+    resp = requests.post(append_url, headers=headers, json=body)
+
     if resp.status_code == 200:
-        print(f"✓ Daily summary appended")
+        print(f"Appended: {today} | {total}")
     else:
-        print(f"  Warning: Could not append daily summary: {resp.text}")
-
-    return True
-
-
-def _ensure_daily_summary_sheet(spreadsheet_id, headers):
-    """Create 'Daily Summary' sheet if it doesn't exist, with headers."""
-    # Check if sheet exists
-    url = f"https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}"
-    resp = requests.get(url, headers=headers)
-    if resp.status_code != 200:
-        return
-
-    sheets = [s['properties']['title'] for s in resp.json().get('sheets', [])]
-    if 'Daily Summary' in sheets:
-        return
-
-    # Add sheet
-    add_url = f"https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}:batchUpdate"
-    body = {
-        "requests": [{
-            "addSheet": {
-                "properties": {"title": "Daily Summary"}
-            }
-        }]
-    }
-    resp = requests.post(add_url, headers=headers, json=body)
-    if resp.status_code == 200:
-        # Add headers
-        header_url = (
-            f"https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}"
-            f"/values/Daily Summary!A1:C1?valueInputOption=USER_ENTERED"
-        )
-        requests.put(header_url, headers=headers, json={
-            "values": [["Date", "Total Stores", "States Counted"]]
-        })
-        print("  Created 'Daily Summary' sheet")
+        print(f"Error: {resp.text}")
 
 
 def main():
-    print(f"=== Victoria's Secret Store Count Scraper - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ===\n")
-
     today = datetime.now(timezone.utc).strftime('%Y-%m-%d')
+    print(f"VS Store Count Scraper - {today}")
 
-    print("Scraping store counts by state...")
-    results = scrape_all_states()
-
-    total = sum(v for v in results.values() if v is not None)
-    failed = sum(1 for v in results.values() if v is None)
-    print(f"\nTotal stores: {total}")
-    if failed:
-        print(f"Failed states: {failed}")
+    total = scrape_total()
+    print(f"Total stores: {total}")
 
     spreadsheet_id = os.getenv('VS_SPREADSHEET_ID')
     if not spreadsheet_id:
-        print("\n✗ VS_SPREADSHEET_ID not set")
+        print("VS_SPREADSHEET_ID not set")
         return
 
-    print(f"\nUpdating Google Sheet...")
-    append_to_sheet(spreadsheet_id, results, today)
-    print(f"\n✓ Done! View at: https://docs.google.com/spreadsheets/d/{spreadsheet_id}")
+    append_to_sheet(spreadsheet_id, today, total)
 
 
 if __name__ == "__main__":
