@@ -36,3 +36,22 @@ services:
         sync: false
       - key: GOOGLE_REFRESH_TOKEN
         sync: false
+
+  - type: cron
+    name: wp-store-count-scraper
+    runtime: python
+    plan: starter
+    region: frankfurt
+    branch: main
+    schedule: "0 9 * * *"  # Daily at 9 AM UTC (10 AM UK time)
+    buildCommand: pip install -r requirements.txt
+    startCommand: python wp_scraper.py
+    envVars:
+      - key: WP_SPREADSHEET_ID
+        sync: false
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: GOOGLE_REFRESH_TOKEN
+        sync: false
